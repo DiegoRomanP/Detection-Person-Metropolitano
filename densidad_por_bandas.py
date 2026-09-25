@@ -112,6 +112,9 @@ while True:
         )
         #Una mediana para preservar bordes
         fgMedian = cv2.medianBlur(fgTH, 5)
+
+        # Dilate: Recorre usando un kernel la imagen. Si alguno es blanco, transforma el pixel central en blanco. Kernel todos 1 para considerar todos los pixeles de la ventana
+        # morphologyEx: Preserva los píxeles que forman una forma elipsoidal (similar a una persona), elimina el resto, y luego expande de nuevo los píxeles sobrevivientes
         fgDil = cv2.dilate(fgMedian, kernel)
         fgDil = cv2.morphologyEx(fgDil, cv2.MORPH_OPEN, kernel_ruido)
 
@@ -123,9 +126,7 @@ while True:
         ])
         filas_debug.append(fila_debug)
 
-        # -----------------------------------------------------
-        # 4) CUADRÍCULA DE LA BANDA
-        # -----------------------------------------------------
+        #Dibujando...
         n_filas = (h_roi - CELL) // CELL + 1 if h_roi >= CELL else 0
         n_cols = (w_roi - CELL) // CELL + 1 if w_roi >= CELL else 0
         activado = np.zeros((n_filas, n_cols), dtype=np.uint8)
@@ -142,10 +143,12 @@ while True:
                 else:
                     cv2.rectangle(roi, (cx, cy), (cx + CELL, cy + CELL), (60, 60, 60), 1)
 
+        #Contabilizando..
         celdas_activadas = int(np.count_nonzero(activado))
         densidad_banda = celdas_activadas / b["celdas_por_persona"]
         total_densidad += densidad_banda
 
+        #Extra: ver las celdas activadas como componentes conectadas
         '''
         n_grupos, etiquetas, stats, _ = cv2.connectedComponentsWithStats(activado, connectivity=8)
         for etiqueta in range(1, n_grupos):  # 0 es el fondo (celdas apagadas)
@@ -168,18 +171,12 @@ while True:
             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 2,
         )
 
-    cv2.putText(img, "(zona de cola no contada)", (10, 145),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150, 150, 150), 1)
     cv2.putText(
         img, f"Total rampa (densidad): {total_densidad:.1f}",
         (10, img.shape[0] - 15),
         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2,
     )
 
-    # Las bandas pueden tener anchos distintos entre sí -> cada fila de
-    # debug puede venir con un ancho distinto -> hay que llevarlas
-    # todas al mismo ancho antes de apilarlas con vstack (si no,
-    # revienta con "array dimensions must match exactly").
     ancho_debug = max(f.shape[1] for f in filas_debug)
     filas_debug = [
         cv2.resize(f, (ancho_debug, f.shape[0])) if f.shape[1] != ancho_debug else f
