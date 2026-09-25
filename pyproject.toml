@@ -7,4 +7,5 @@ requires-python = ">=3.12,<3.14"
 dependencies = [
     "numpy>=2.5.3",
     "opencv-python>=5.0.0.93",
+    "scikit-image>=0.26.0",
 ]

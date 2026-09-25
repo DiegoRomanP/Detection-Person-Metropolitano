@@ -10,14 +10,6 @@ CAL_Y_A, CAL_CPP_A = 472, 5
 CAL_Y_B, CAL_CPP_B = 687, 8
 
 
-def celdas_por_persona_en(y_medio: float) -> int:
-    """Interpola linealmente entre los dos puntos calibrados."""
-    t = (y_medio - CAL_Y_A) / (CAL_Y_B - CAL_Y_A)
-    cpp = CAL_CPP_A + t * (CAL_CPP_B - CAL_CPP_A)
-    return max(1, round(cpp))
-
-
-
 BANDAS = [
     {
         "nombre": "b0",
