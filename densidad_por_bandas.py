@@ -1,50 +1,22 @@
-# =============================================================
-# PROTOTIPO: DENSIDAD POR CUADRÍCULA, VARIAS BANDAS HORIZONTALES
-# =============================================================
-# Se descarta la banda "lejos" (cerca de la entrada, y=150-365):
-# ahí la gente se detiene o camina muy lento formando una cola, y
-# un sustractor de fondo (MOG2) termina aprendiendo a esas personas
-# como si fueran parte del fondo -> deja de marcarlas como
-# movimiento sin importar qué tan fina sea la cuadrícula. Esto no
-# es un problema de resolución de grilla, es que ya no hay señal
-# de "movimiento" para medir ahí. Se documenta como limitación y
-# no se cuenta esa zona.
-#
-# El resto de la rampa (y=365 a y=795, donde la gente sí camina de
-# forma continua) se divide en tantas bandas horizontales como
-# N_BANDAS indique, para compensar la perspectiva: una persona
-# cerca de la cámara ocupa más celdas que una persona lejos.
-#
-# CELDAS_POR_PERSONA por banda se interpola linealmente entre dos
-# puntos calibrados a ojo viendo la cuadrícula sobre el video real:
-#   y=472 (centro de la vieja banda "medio") -> ~5 celdas/persona
-#   y=687 (centro de la vieja banda "cerca") -> ~8 celdas/persona
-# No es un modelo físico de la cámara, es una aproximación simple
-# a partir de dos mediciones reales.
-#
-# Sigue usando solo procesamiento de imagen (sustracción de fondo +
-# umbralización + morfología): nada de aprendizaje automático.
-# =============================================================
 import cv2
 import numpy as np
 
-# =============================================================
-# CAPTURA DE VIDEO
-# =============================================================
+
 video = cv2.VideoCapture("video_grafica.mp4")
 
-# =============================================================
-# RANGO DE LA RAMPA A CONTAR (se excluye la zona de cola/entrada)
-# =============================================================
-Y0, Y1 = 365, 795
-X0, X1 = 0, 380          # excluye la baranda/escalera de la derecha
-N_BANDAS = 3              # cada banda debe ser más alta que una persona
-                           # (ver calibración: alturas típicas de ~30-60px,
-                           # con picos bastante más grandes por fragmentos
-                           # que se funden entre sí) para no cortarla a la
-                           # mitad entre dos bandas.
 
-# --- Puntos de calibración (ver comentario arriba) ---
+Y0, Y1 = 365, 795
+N_BANDAS = 3
+
+# posición y ancho horizontal, independiente por banda: (x0, x1)
+# debe tener exactamente N_BANDAS elementos, uno por banda (de
+# arriba/lejos a abajo/cerca)
+X_POR_BANDA = [
+    (0, 380),
+    (0, 380),
+    (0, 380),
+]
+
 CAL_Y_A, CAL_CPP_A = 472, 5
 CAL_Y_B, CAL_CPP_B = 687, 8
 
@@ -56,63 +28,30 @@ def celdas_por_persona_en(y_medio: float) -> int:
     return max(1, round(cpp))
 
 
-# =============================================================
-# CONSTRUIR LAS BANDAS
-# =============================================================
+
+assert len(X_POR_BANDA) == N_BANDAS, "X_POR_BANDA debe tener un (x0,x1) por cada banda"
+
 BANDAS = []
 alto_banda = (Y1 - Y0) / N_BANDAS
 for i in range(N_BANDAS):
     y0 = int(Y0 + i * alto_banda)
     y1 = int(Y0 + (i + 1) * alto_banda)
     y_medio = (y0 + y1) / 2
+    x0_banda, x1_banda = X_POR_BANDA[i]
     BANDAS.append({
         "nombre": f"b{i}",
-        "y0": y0, "y1": y1, "x0": X0, "x1": X1,
+        "y0": y0, "y1": y1, "x0": x0_banda, "x1": x1_banda,
         "celdas_por_persona": celdas_por_persona_en(y_medio),
         "bg": cv2.createBackgroundSubtractorMOG2(history=100, varThreshold=40, detectShadows=True),
     })
 
-# =============================================================
-# KERNELS
-# =============================================================
+
 kernel = np.ones((5, 5), np.uint8)
 kernel_ruido = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
 
-# =============================================================
-# PARÁMETROS DE LA CUADRÍCULA
-# =============================================================
 CELL = 20
 UMBRAL_ACTIVACION = 0.35
 
-# =============================================================
-# ESTABILIZACIÓN (opcional del enunciado)
-# =============================================================
-# Se midió el corrimiento real entre frames con cv2.phaseCorrelate
-# sobre ~1000 frames: mediana ~0.6px, promedio ~1.0px. Es un temblor
-# pequeño de una cámara fija (vibración de la estructura / compresión
-# del video), no un paneo.
-#
-# Se compara cada frame contra el frame ANTERIOR (no contra uno fijo
-# del inicio del video): en un video de 5-10 minutos la multitud es
-# completamente distinta minuto a minuto, así que comparar contra un
-# solo frame de referencia lejano vuelve la correlación de fase poco
-# fiable (se probó y el "error" resultante era enorme, ~200px, solo
-# por el contenido tan distinto, no por temblor real). Frame a frame
-# el contenido cambia poco, así que la comparación es confiable.
-#
-# cv2.phaseCorrelate(anterior, actual) devuelve el corrimiento (dx,dy)
-# tal que actual ≈ anterior desplazado por (dx,dy); para alinear
-# actual de vuelta hay que aplicarle el desplazamiento INVERSO
-# (-dx,-dy) (se verificó con una prueba controlada: un corrimiento
-# conocido de (10,5) devuelve (dx,dy)=(10,5), no su negativo).
-#
-# cv2.phaseCorrelate mide correlación global de todo el frame, así
-# que una multitud grande moviéndose puede "engañarlo" y devolver un
-# corrimiento gigante (se vio un caso de 50px) que NO es la cámara
-# moviéndose. Por eso se descarta cualquier corrimiento mayor a
-# MAX_DESPLAZAMIENTO: un temblor real de cámara es de pocos píxeles,
-# así que un valor grande es señal de que la estimación es ruido.
-# =============================================================
 ESTABILIZAR = True
 MAX_DESPLAZAMIENTO = 5.0  # px
 
@@ -167,8 +106,9 @@ while True:
         # -----------------------------------------------------
         # 2) MOVIMIENTO (sustractor propio de la banda)
         # -----------------------------------------------------
-        fg = b["bg"].apply(roi)
-        fg[fg == 127] = 0
+        fg = cv2.cvtColor(roi,cv2.COLOR_BGR2GRAY)
+        #fg = b["bg"].apply(roi)
+        #fg[fg == 127] = 0
 
         # -----------------------------------------------------
         # 3) LIMPIEZA
