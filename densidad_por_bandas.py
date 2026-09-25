@@ -5,17 +5,6 @@ import numpy as np
 video = cv2.VideoCapture("video_grafica.mp4")
 
 
-Y0, Y1 = 365, 795
-N_BANDAS = 3
-
-# posición y ancho horizontal, independiente por banda: (x0, x1)
-# debe tener exactamente N_BANDAS elementos, uno por banda (de
-# arriba/lejos a abajo/cerca)
-X_POR_BANDA = [
-    (0, 380),
-    (0, 380),
-    (0, 380),
-]
 
 CAL_Y_A, CAL_CPP_A = 472, 5
 CAL_Y_B, CAL_CPP_B = 687, 8
@@ -29,21 +18,29 @@ def celdas_por_persona_en(y_medio: float) -> int:
 
 
 
-assert len(X_POR_BANDA) == N_BANDAS, "X_POR_BANDA debe tener un (x0,x1) por cada banda"
+BANDAS = [
+    {
+        "nombre": "b0",
+        "y0": 207, "y1": 311,
+        "x0": 92, "x1": 252,
+        "celdas_por_persona": 5,
+    },
+    {
+        "nombre": "b1",
+        "y0": 374, "y1": 542,
+        "x0": 55, "x1": 229,
+        "celdas_por_persona": 6,
+    },
+    {
+        "nombre": "b2",
+        "y0": 547, "y1": 829,
+        "x0": 20, "x1": 283,
+        "celdas_por_persona": 9,
+    },
+]
 
-BANDAS = []
-alto_banda = (Y1 - Y0) / N_BANDAS
-for i in range(N_BANDAS):
-    y0 = int(Y0 + i * alto_banda)
-    y1 = int(Y0 + (i + 1) * alto_banda)
-    y_medio = (y0 + y1) / 2
-    x0_banda, x1_banda = X_POR_BANDA[i]
-    BANDAS.append({
-        "nombre": f"b{i}",
-        "y0": y0, "y1": y1, "x0": x0_banda, "x1": x1_banda,
-        "celdas_por_persona": celdas_por_persona_en(y_medio),
-        "bg": cv2.createBackgroundSubtractorMOG2(history=100, varThreshold=40, detectShadows=True),
-    })
+for b in BANDAS:
+    b["bg"] = cv2.createBackgroundSubtractorMOG2(history=100, varThreshold=40, detectShadows=True)
 
 
 kernel = np.ones((5, 5), np.uint8)
@@ -96,33 +93,30 @@ while True:
     total_densidad = 0.0
     filas_debug = []  # una fila de imágenes (etapas del filtro) por banda
 
+
+    #Por cada banda
     for b in BANDAS:
-        # -----------------------------------------------------
-        # 1) RECORTE DE LA BANDA
-        # -----------------------------------------------------
+
+        #Extraer el parche que le corresponde
         roi = img[b["y0"]:b["y1"], b["x0"]:b["x1"]]
         h_roi, w_roi = roi.shape[:2]
 
-        # -----------------------------------------------------
-        # 2) MOVIMIENTO (sustractor propio de la banda)
-        # -----------------------------------------------------
+        #Mapear la imagen a escala de grises
         fg = cv2.cvtColor(roi,cv2.COLOR_BGR2GRAY)
         #fg = b["bg"].apply(roi)
         #fg[fg == 127] = 0
 
-        # -----------------------------------------------------
-        # 3) LIMPIEZA
-        # -----------------------------------------------------
+        #Aplicar una umbralización adaptativa
         fgTH = cv2.adaptiveThreshold(
             fg, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 25, -16
         )
+        #Una mediana para preservar bordes
         fgMedian = cv2.medianBlur(fgTH, 5)
         fgDil = cv2.dilate(fgMedian, kernel)
         fgDil = cv2.morphologyEx(fgDil, cv2.MORPH_OPEN, kernel_ruido)
 
         # Guardar las etapas para mostrarlas luego junto al video original
         fila_debug = np.hstack([
-            etiquetar(fg, "1) fondo (MOG2)"),
             etiquetar(fgTH, "2) umbral adaptativo"),
             etiquetar(fgMedian, "3) mediana"),
             etiquetar(fgDil, "4) dilatar + abrir"),
@@ -152,15 +146,7 @@ while True:
         densidad_banda = celdas_activadas / b["celdas_por_persona"]
         total_densidad += densidad_banda
 
-        # -----------------------------------------------------
-        # 4b) AGRUPAR CELDAS VECINAS ACTIVADAS -> "detecciones"
-        #     Cada grupo de celdas conectadas (8-conectividad, para
-        #     que fragmentos que solo se tocan en diagonal cuenten
-        #     como el mismo grupo) se dibuja como UN rectángulo,
-        #     para poder ver si ese grupo corresponde a una persona
-        #     completa (~1.0) o a una detección incompleta/fragmento
-        #     (bastante menos que 1.0).
-        # -----------------------------------------------------
+        '''
         n_grupos, etiquetas, stats, _ = cv2.connectedComponentsWithStats(activado, connectivity=8)
         for etiqueta in range(1, n_grupos):  # 0 es el fondo (celdas apagadas)
             gx, gy, gw, gh, n_celdas_grupo = stats[etiqueta]
@@ -173,10 +159,8 @@ while True:
                 roi, f"{personas_grupo:.1f}", (px, max(0, py - 4)),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1,
             )
+        '''
 
-        # -----------------------------------------------------
-        # 5) DIBUJAR LÍMITE DE LA BANDA Y SU ESTIMACIÓN
-        # -----------------------------------------------------
         cv2.rectangle(img, (b["x0"], b["y0"]), (b["x1"], b["y1"]), (0, 255, 255), 1)
         cv2.putText(
             img, f"{densidad_banda:.1f}",
@@ -184,9 +168,6 @@ while True:
             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 2,
         )
 
-    # ---------------------------------------------------------
-    # 6) ZONA IGNORADA (limitación documentada) + TOTAL
-    # ---------------------------------------------------------
     cv2.putText(img, "(zona de cola no contada)", (10, 145),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150, 150, 150), 1)
     cv2.putText(
@@ -194,6 +175,16 @@ while True:
         (10, img.shape[0] - 15),
         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2,
     )
+
+    # Las bandas pueden tener anchos distintos entre sí -> cada fila de
+    # debug puede venir con un ancho distinto -> hay que llevarlas
+    # todas al mismo ancho antes de apilarlas con vstack (si no,
+    # revienta con "array dimensions must match exactly").
+    ancho_debug = max(f.shape[1] for f in filas_debug)
+    filas_debug = [
+        cv2.resize(f, (ancho_debug, f.shape[0])) if f.shape[1] != ancho_debug else f
+        for f in filas_debug
+    ]
 
     cv2.imshow("Original", original)
     cv2.imshow("video", img)
